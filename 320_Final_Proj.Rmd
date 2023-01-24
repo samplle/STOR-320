@@ -1,0 +1,515 @@
+---
+title: "320 Final Proj"
+author: "Sam Pell"
+output: html_notebook
+---
+
+Setting up the libraries and R Notebook.
+
+```{r setup, include = FALSE}
+library(baseballr)
+library(dplyr)
+library(ggplot2)
+library(gganimate)
+library(leaps)
+library(MASS)
+library(tidyverse)
+library(caret)
+library(sportyR)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+Scraping pitch data from the web. This gives a set of every Ohtani pitch. 
+
+```{r}
+ohtani_p18 <- scrape_statcast_savant(start_date = "2018-03-29", end_date = "2019-07-07", playerid = 660271, player_type = "pitcher")
+
+ohtani_p20 <- scrape_statcast_savant(start_date = "2020-03-26", end_date = "2020-09-27", playerid = 660271, player_type = "pitcher")
+
+ohtani_p21 <- scrape_statcast_savant(start_date = "2021-04-01", end_date = "2021-10-03", playerid = 660271, player_type = "pitcher")
+
+ohtani_p22 <- scrape_statcast_savant(start_date = "2022-04-07", end_date = "2022-10-05", playerid = 660271, player_type = "pitcher")
+
+ohtani_pitch_orig <- rbind(ohtani_p18, ohtani_p20, ohtani_p21, ohtani_p22)
+head(ohtani_pitch_orig, 16)
+```
+
+Selecting 2-strike counts from Ohtani's pitches. Trying to find sample size as well. 
+
+```{r}
+ohtani_2k_counts <- ohtani_pitch_orig[strikes == 2,]
+head(ohtani_2k_counts, 16)
+nrow(ohtani_2k_counts)
+```
+
+Making a raw table of how many of each pitch type Ohtani threw in his 2-strike counts.
+
+```{r}
+ohtani_2k_dist = as.data.frame(100 * table(ohtani_2k_counts$pitch_type)[c(4,6,3,1,2,5)] / nrow(ohtani_2k_counts))
+ohtani_2k_dist
+```
+
+Plotting these distributions
+
+```{r}
+pie(ohtani_2k_dist$Freq, labels = (ohtani_2k_dist$Var1), radius = 1, col = c("#AD1B0E", "#C76006", "#EBB73F", "#36A37B", "#3A1C94", "#A34DD1"), init.angle = 90, clockwise = TRUE, main = "2-Strike Count Pitch Distribution for Shohei Ohtani")
+```
+
+Finding the strikeouts.
+
+```{r}
+ohtani_2k_strikeouts = ohtani_2k_counts[ohtani_2k_counts$events == "strikeout"]
+head(ohtani_2k_strikeouts, 16)
+```
+
+Finding these distributions.
+
+```{r}
+ohtani_2k_strikeouts_dist = as.data.frame(100 * table(ohtani_2k_strikeouts$pitch_type)[c(4,6,3,1,2,5)] / nrow(ohtani_2k_strikeouts))
+ohtani_2k_strikeouts_dist
+```
+
+Plotting these distributions.
+
+```{r}
+pie(ohtani_2k_strikeouts_dist$Freq, labels = (ohtani_2k_strikeouts_dist$Var1), radius = 1, col = c("#AD1B0E", "#C76006", "#EBB73F", "#36A37B", "#3A1C94", "#A34DD1"), init.angle = 90, clockwise = TRUE, main = "2-Strike Count Strikeouts Distribution By Pitch for Shohei Ohtani")
+```
+
+Finding the difference in percentages among the two datasets.
+
+```{r}
+ohtani_2k_combinations = cbind(ohtani_2k_dist, ohtani_2k_strikeouts_dist)[,-3]
+ohtani_2k_combinations$PitchType = ohtani_2k_combinations$Var1
+ohtani_2k_combinations$PitchDist = ohtani_2k_combinations$Freq
+ohtani_2k_combinations$StrikeoutDist = ohtani_2k_combinations$Freq.1
+ohtani_2k_combinations = ohtani_2k_combinations[,-c(1,2,3)]
+ohtani_2k_combinations$Diff = ohtani_2k_combinations$StrikeoutDist - ohtani_2k_combinations$PitchDist
+ohtani_2k_combinations
+```
+
+Finding how often Ohtani uses his three top pitch types in combination. 
+
+```{r}
+sum(ohtani_2k_dist[ohtani_2k_dist$Var1 == 'FF' | ohtani_2k_dist$Var1 == 'FS' | ohtani_2k_dist$Var1 == 'SL',][,2])
+```
+
+Based on the data, I want to filter out to just get the Splitter, Slider, and 4-Seamer, which are used over 90% of the time. 
+
+```{r}
+ohtani_2k_select = ohtani_2k_counts[pitch_type == 'FF' | pitch_type == 'FS' | pitch_type == 'SL']
+ohtani_2k_select
+```
+
+Looking at the pitch distribution and strikeout differential for the top 3 pitches. 
+
+```{r}
+ohtani_2k_combinations[1:3,]
+```
+
+Since these are the pitch types with significant dataset sizes, these will be regressed upon to find the factors that lead to strikeouts. First, I will make a Strikeout dummy variable.
+
+```{r}
+ohtani_2k_select$strikeout = as.factor(ifelse(ohtani_2k_select$events == 'strikeout', 1, 0))
+head(ohtani_2k_select, 16)
+```
+
+Removing non-factor/non-numeric columns to simplify the dataset for analysis.
+
+```{r}
+ohtani_2k_analysis = ohtani_2k_select[,-c("player_name", 
+                                          "des", 
+                                          "game_date", 
+                                          "pitcher", 
+                                          "p_throws", 
+                                          "on_3b", 
+                                          "on_2b", 
+                                          "on_1b", 
+                                          "spin_dir", 
+                                          "spin_rate_deprecated", 
+                                          "break_angle_deprecated", 
+                                          "break_length_deprecated", 
+                                          "strikes", 
+                                          "tfs_deprecated", 
+                                          "tfs_zulu_deprecated", 
+                                          "fielder_2", 
+                                          "umpire", 
+                                          "sv_id", 
+                                          "pitcher_1", 
+                                          "fielder_2_1", 
+                                          "fielder_3", 
+                                          "fielder_4", 
+                                          "fielder_5", 
+                                          "fielder_6", 
+                                          "fielder_7", 
+                                          "fielder_8", 
+                                          "fielder_9", 
+                                          "batter", 
+                                          "events", 
+                                          "description", 
+                                          "game_type", 
+                                          "game_pk", 
+                                          "woba_denom", 
+                                          "home_team", 
+                                          "away_team", 
+                                          "game_year", 
+                                          "hc_x", 
+                                          "hc_y", 
+                                          "hit_distance_sc", 
+                                          "hit_location", 
+                                          "launch_speed_angle", 
+                                          "launch_speed", 
+                                          "launch_angle",
+                                          "bb_type", 
+                                          "type",
+                                          "delta_home_win_exp",
+                                          "delta_run_exp",
+                                          "estimated_ba_using_speedangle",
+                                          "estimated_woba_using_speedangle",
+                                          "pitch_name",
+                                          "if_fielding_alignment",
+                                          "of_fielding_alignment",
+                                          "woba_value",
+                                          "post_bat_score",
+                                          "post_fld_score",
+                                          "post_away_score",
+                                          "post_home_score",
+                                          "home_score",
+                                          "away_score",
+                                          "bat_score",
+                                          "fld_score",
+                                          "sz_top",
+                                          "sz_bot",
+                                          "babip_value",
+                                          "iso_value",
+                                          "outs_when_up",
+                                          "pitch_number",
+                                          "inning",
+                                          "inning_topbot",
+                                          "at_bat_number",
+                                          "balls",
+                                          "zone")]
+ohtani_2k_analysis$pitch_type = as.factor(ohtani_2k_analysis$pitch_type)
+ohtani_2k_analysis$stand = as.factor(ohtani_2k_analysis$stand)
+
+head(ohtani_2k_analysis, 16)
+```
+
+```{r}
+ohtani_splitter = ohtani_2k_analysis[pitch_type == 'FS']
+names(ohtani_splitter)
+ohtani_slider = ohtani_2k_analysis[pitch_type == 'SL']
+ohtani_4_seamer = ohtani_2k_analysis[pitch_type == 'FF']
+```
+
+
+From here, I want to know which variables predict the indicator variable best. So I will do a stepwise logistic regression by AIC. 
+
+```{r}
+splitter_strikeout_mod <- glm(strikeout ~ release_speed +
+                                release_pos_x +
+                                release_pos_z +
+                                stand +
+                                pfx_x +
+                                pfx_z +
+                                plate_x +
+                                plate_z +  
+                                effective_speed +
+                                release_spin_rate +
+                                release_extension +
+                                release_pos_y +
+                                spin_axis, 
+                              family = 'binomial', 
+                              data = na.omit(ohtani_splitter)) %>%
+  stepAIC(direction = 'both', trace = FALSE)
+summary(splitter_strikeout_mod)
+
+slider_strikeout_mod = glm(strikeout ~ release_speed +
+                                release_pos_x +
+                                release_pos_z +
+                                stand +
+                                pfx_x +
+                                pfx_z +
+                                plate_x +
+                                plate_z +  
+                                effective_speed +
+                                release_spin_rate +
+                                release_extension +
+                                release_pos_y +
+                                spin_axis, 
+                                family = 'binomial', 
+                                data = na.omit(ohtani_slider)) %>%
+  stepAIC(direction = 'both', trace = FALSE)
+summary(slider_strikeout_mod)
+
+four_seamer_strikeout_mod = glm(strikeout ~ release_speed +
+                                release_pos_x +
+                                release_pos_z +
+                                stand +
+                                pfx_x +
+                                pfx_z +
+                                plate_x +
+                                plate_z +  
+                                effective_speed +
+                                release_spin_rate +
+                                release_extension +
+                                release_pos_y +
+                                spin_axis, 
+                                family = 'binomial', 
+                                data = na.omit(ohtani_4_seamer)) %>%
+  stepAIC(direction = 'both', trace = FALSE)
+summary(four_seamer_strikeout_mod)
+```
+
+```{r}
+slider_basic_mod = glm(strikeout ~ effective_speed, family = binomial, data = ohtani_slider)
+summary(slider_basic_mod)
+```
+
+```{r}
+logit <- function(B0, B1, x) {
+  return(exp(B0 + B1 * x) / (1 + exp(B0 + B1 * x)))
+}
+```
+
+```{r}
+plot(jitter(as.numeric(strikeout), amount = 0.1) ~ effective_speed, data = ohtani_slider)
+
+B0 = summary(slider_basic_mod)$coef[1]
+B1 = summary(slider_basic_mod)$coef[2]
+
+curve(exp(B0 + B1 * x) / (1 + exp(B0 + B1 * x)), add = TRUE, lw = 2, col = 'magenta')
+```
+
+```{r}
+speed.table = table(ohtani_slider$effective_speed, ohtani_slider$strikeout)
+```
+
+```{r}
+p.hat = as.vector(speed.table[,2] / rowSums(speed.table))
+```
+
+```{r}
+pi.hat = logit(B0, B1, unique(ohtani_slider$effective_speed))
+```
+
+```{r}
+speed = data.frame(
+  'Effective Speed' = unique(ohtani_slider$effective_speed),
+  'p.hat' = (p.hat),
+  'pi.hat' = (pi.hat)
+)
+
+speed
+```
+
+```{r}
+plot(p.hat ~ Effective.Speed, data = speed, xlim = c(min(Effective.Speed) - 5, max(Effective.Speed) + 5))
+
+curve(logit(B0, B1, x), add = TRUE, lw = 2, col = "magenta")
+```
+
+Working on a new visual to show 2-strike count pitch locations, relative to the batter's box. Here I am working with Ohtani's 3 most common pitch types on these 2-strike counts. 
+
+```{r}
+head(ohtani_2k_select, 16)
+median.sz.top = median(ohtani_2k_select$sz_top)
+median.sz.bot = median(ohtani_2k_select$sz_bot)
+```
+
+```{r}
+getAtBatPlotHitter <- function(date, batter, inning)  {
+      
+      data = tmData %>% filter(DateForBatters == date) %>% filter(Batter == batter) %>% filter(Inning == inning)
+      
+      bot = data$szBot[1]
+      top = data$szTop[1]
+      x <- c(-.95,.95,.95,-.95,-.95)
+      z <- c(bot,bot,top,top,bot)
+      # HEREE
+      #store in dataframe
+      sz <- tibble(x,z)
+      
+      if(data$BatterSide == "Left") {
+        stand = "L"
+        stand_xcoord = -1.5
+      } else {
+        stand = "R"
+        stand_xcoord = 1.5
+      }
+      
+      ggplot()+
+        geom_path(data = sz, aes(x=x, y=z))+
+        coord_equal()+
+        xlab("Width (Pitcher View)")+
+        ylab("Height")+
+        geom_point(data = data,aes(x=PlateLocSide,y=PlateLocHeight, color=TaggedPitchType)) +
+        xlim(-2,2)+
+        ylim(0,4.5)+
+        ggtitle(paste("Inning",inning," | ",batter))+
+        geom_text(data = data,aes(label=stand, x = stand_xcoord),y=2.5,size=7)+
+        geom_text(data = data, aes(label=PitchCall, x=PlateLocSide, y=PlateLocHeight),size=4, vjust=2)+
+        geom_text(data = data, aes(label=PitchofPA, x=PlateLocSide, y=PlateLocHeight),size=2.5, vjust=-1.2)+geom_segment(aes(x = -1.104, y = 1.6, xend = -1.104, yend = 2))+
+        geom_segment(aes(x = 1.104, y = 1.6, xend = 1.104, yend = 2))
+      
+}
+```
+
+Drawing Ohtani's pitches by type and location.
+
+```{r}
+ggplot(data = ohtani_2k_select, aes(x = plate_x, y = plate_z), group = pitch_type) +
+  geom_point(aes(col = pitch_type)) +
+  xlab("Pitch X Coordinate") +
+  ylab("Pitch Y Coordinate") +
+  labs(color = "Pitch Type") +
+  xlim(-2,2) +
+  ylim(1,4) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.bot, xend = 17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.top)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = -17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = 17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.bot)) +
+  facet_wrap(~pitch_type) +
+  labs(title = "2K Count Pitches by Location Over Plate") +
+  labs(subtitle = "Median Strike Zone in Black")
+```
+
+```{r}
+ggplot(data = ohtani_slider, aes(x = plate_x, y = plate_z), group = strikeout) +
+  geom_point(aes(col = strikeout)) +
+  xlab("Pitch X Coordinate") +
+  ylab("Pitch Y Coordinate") +
+  labs(color = "Strikeout") +
+  xlim(-2,2) +
+  ylim(1,4) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.bot, xend = 17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.top)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = -17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = 17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.bot))
+```
+
+
+
+```{r}
+ggplot(data = ohtani_splitter, aes(x = plate_x, y = plate_z), group = strikeout) +
+  geom_point(aes(col = strikeout)) +
+  xlab("Pitch X Coordinate") +
+  ylab("Pitch Y Coordinate") +
+  labs(color = "Strikeout") +
+  xlim(-2,2) +
+  ylim(1,4) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.bot, xend = 17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.top)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = -17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = 17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.bot))
+```
+
+```{r}
+ggplot(data = ohtani_4_seamer, aes(x = plate_x, y = plate_z), group = strikeout) +
+  geom_point(aes(col = strikeout)) +
+  xlab("Pitch X Coordinate") +
+  ylab("Pitch Y Coordinate") +
+  labs(color = "Strikeout") +
+  xlim(-2,2) +
+  ylim(1,4) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.bot, xend = 17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.top)) +
+  geom_segment(aes(x = -17 / 12 / 2, y = median.sz.top, xend = -17 / 12 / 2, yend = median.sz.bot)) +
+  geom_segment(aes(x = 17 / 12 / 2, y = median.sz.top, xend = 17 / 12 / 2, yend = median.sz.bot))
+```
+
+This chart visualizes how often Shohei Ohtani gets strikeouts on given types of pitches (on 2-strike counts), where the strikeout rate is subtracted from the pitch frequency to see how effective a given type of pitch is. 
+
+```{r}
+ggplot(data = ohtani_2k_combinations, aes(x = PitchType, y = Diff)) +
+  geom_col(aes(col = PitchType, fill = PitchType)) +
+  geom_hline(yintercept = 0) +
+  xlab("Pitch Type") +
+  ylab("Pitch Frequency - Strikeout Frequency") +
+  labs(col = "Pitch Type", fill = "Pitch Type", title = "Difference in Pitch and Strikeout Frequency by Pitch Type")
+```
+
+```{r}
+slider_speeds = ohtani_2k_select[pitch_type == 'SL',c(1,3)]
+slider_speeds
+
+four_seamer_speeds = ohtani_2k_select[pitch_type == 'FF',c(1,3)]
+four_seamer_speeds
+
+splitter_speeds = ohtani_2k_select[pitch_type == 'FS',c(1,3)]
+splitter_speeds
+
+release_speeds = rbind(slider_speeds, four_seamer_speeds, splitter_speeds)
+```
+
+The graph below charts the release speeds for each type of common pitch thrown by Shohei Ohtani on 2-strike counts. These vary by pitch type, and are showcased relative to their frequencies. Each vertical line represents the median release speed for a type of pitch. 
+
+```{r}
+ggplot(release_speeds, aes(x=release_speed, fill=pitch_type, color = pitch_type)) + 
+  geom_density(alpha = 0.4) +
+  xlab("Release Speed") +
+  ylab("Percentage of Pitches Thrown") +
+  ylim(c(0,0.4)) +
+  xlim(c(70, 110)) +
+  labs(title = "2K Count Release Speeds by Pitch Type") +
+  labs(subtitle = "Shohei Ohtani, Sliders, Fastballs, and Four Seamers only") +
+  geom_vline(xintercept = median(slider_speeds$release_speed), col = "deepskyblue2", linetype = 'dashed') +
+  geom_vline(xintercept = median(splitter_speeds$release_speed), col = "green", linetype = 'dashed') +
+  geom_vline(xintercept = median(four_seamer_speeds$release_speed), col = "coral", linetype = 'dashed') +
+  labs(color = "Pitch Type", fill = "Pitch Type")
+```
+
+```{r}
+slider_position_change = ohtani_2k_select[pitch_type == 'SL',c(1,2,4,5,30,31)]
+
+splitter_position_change = ohtani_2k_select[pitch_type == 'FS',c(1,2,4,5,30,31)]
+
+four_seamer_position_change = ohtani_2k_select[pitch_type == 'FF',c(1,2,4,5,30,31)]
+
+position_changes = rbind(slider_position_change, splitter_position_change, four_seamer_position_change)
+position_changes$delta_x = position_changes$release_pos_x - position_changes$plate_x
+position_changes$delta_z = position_changes$release_pos_z - position_changes$plate_z
+position_changes$total_delta = sqrt(position_changes$delta_x ^ 2 + position_changes$delta_z ^ 2)
+head(position_changes, 16)
+```
+
+Below is a chart wherein the Relative Frequencies of any given pitch (by Shohei Ohtani on a 2-strike count) are plotted against its total movement, that is, the pythagorean distance it traveled in the x and z directions.
+
+```{r}
+ggplot(position_changes, aes(x=total_delta, fill=pitch_type, color = pitch_type)) + 
+  geom_density(alpha = 0.4) +
+  xlab("Total Pitch Movement") +
+  ylab("Percentage of Pitches Thrown") +
+  labs(color = "Pitch Type", fill = "Pitch Type") +
+  labs(title = "2K Count Pitch Movements by Pitch Type") +
+  labs(subtitle = "Shohei Ohtani, Sliders, Fastballs, and Four Seamers only")
+```
+
+Here, the different movements are charted for Ohtani's pitches on 2-strike counts. These differ by pitch type, and are separated as such. From this, we can see how the movements of a given pitch are affected by what its intent is-four seamer, slider, splitter.
+
+```{r}
+ggplot(position_changes, aes(x = delta_x, y = delta_z, color = pitch_type)) +
+  geom_point(size = 3, alpha = 0.4) +
+  xlab("Horizontal Pitch Movement") +
+  ylab("Vertical Pitch Movement") +
+  labs(color = "Pitch Type") +
+  labs(title = "2K Count Pitch Movements by Pitch Type") +
+  labs(subtitle = "Shohei Ohtani, Sliders, Fastballs, and Four Seamers only") +
+  facet_wrap(~pitch_type)
+```
+
+This animated chart graphs the movement, horizontally and vertically, of Ohtani's pitches as they come from the pitcher's mound to home plate. As the years go on, the data does not show major differences, although by the end, Ohtani seems to be getting much more motion on his throws, making them harder to hit. 
+
+```{r}
+plot <- ggplot(position_changes, aes(x = delta_x, y = delta_z)) +
+  geom_point(size = 3, alpha = 0.4) +
+  xlab("Horizontal Pitch Movement") +
+  ylab("Vertical Pitch Movement") +
+  labs(color = "Pitch Type") +
+  labs(title = "2K Count Pitch Movements by Pitch Type") +
+  labs(subtitle = "Shohei Ohtani, Sliders, Fastballs, and Four Seamers only") 
+
+plot + 
+  transition_states(game_date, wrap = FALSE) +
+  shadow_mark(alpha = 0.2, size = 0.5)
+```
+
