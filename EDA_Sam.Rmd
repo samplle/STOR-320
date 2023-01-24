@@ -1,0 +1,307 @@
+---
+title: "Exploratory Data Analysis"
+author: "Sam Pell"
+date: '2022-10-05'
+output:
+  html_document:
+    df_print: paged
+---
+
+**EDA**
+
+This R Notebook should be a catalog of my processes to calculate precise or approximated answers to a series of questions about the career of Anaheim Angels star Shohei Ohtani.
+
+Those questions are as follows: Q1: Is there a difference between average exit velocity on Ohtani's home runs over the years? There has been discussion over change in the ball (material used to make the baseballs), has it impacted Ohtani? Q2: Which pitcher has the best performances against Shohei? Which batter?
+
+Question 1: A Difference in Exit Velocity over the Years
+
+The following code will load in the baseballr library, which will help process the baseball-specific data, as well as dplyr and ggplot2, which will provide useful general functions. It should also suppress code in output.
+
+```{r}
+library(baseballr)
+library(dplyr)
+library(ggplot2)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+In the following code I use web scraping to develop datasets containing Shohei Ohtani's *batting* stats.
+
+```{r}
+ohtani_b18 <- scrape_statcast_savant(start_date = "2018-03-29", end_date = "2018-09-30", playerid = 660271, player_type = "batter")
+
+ohtani_b19 <- scrape_statcast_savant(start_date = "2019-03-28", end_date = "2019-09-29", playerid = 660271, player_type = "batter")
+
+ohtani_b20 <- scrape_statcast_savant(start_date = "2020-03-26", end_date = "2020-09-27", playerid = 660271, player_type = "batter")
+
+ohtani_b21 <- scrape_statcast_savant(start_date = "2021-04-01", end_date = "2021-10-03", playerid = 660271, player_type = "batter")
+
+ohtani_b22 <- scrape_statcast_savant(start_date = "2022-04-07", end_date = "2022-10-05", playerid = 660271, player_type = "batter")
+  
+ohtani_bat_orig <- rbind(ohtani_b18, ohtani_b19, ohtani_b20, ohtani_b21, ohtani_b22)
+```
+
+Here I'm selecting the columns that will be useful to my primary analysis.
+
+```{r}
+ohtani_bat = ohtani_bat_orig %>%
+  select(game_year,
+         batter,
+         launch_speed)
+head(ohtani_bat)
+```
+
+Next, I'll have to group Ohtani's pitches by year, that way I can accurately track how his launch speed has changed. I've taken years to be a grouping variable, rather than using the game date, because MLB rules and ball changes would not significantly change mid-season. Rather, this analysis looks at the year-to-year change, on a more macro-level.
+
+```{r}
+ohtani_bat <- ohtani_bat %>%
+  group_by(game_year)
+```
+
+Of course, this data actually needs to be analyzed in its groupings. Launch Speed has been chosen to represent Ohtani's exit velocities, because it is the primary statistic to measure the exit velocity of a ball.
+
+```{r}
+ohtani_bat_sum <- ohtani_bat %>%
+  summarise(
+    launch_speed_by_year = mean(launch_speed, na.rm = TRUE)
+  )
+ohtani_bat_sum
+```
+
+Putting some other skills to the test, I will create a linear model to see if there is any significant correlation between year and launch_speed_by_year.
+
+```{r}
+ohtani_bat_sum_mod = lm(launch_speed_by_year ~ game_year, data = ohtani_bat_sum)
+
+summary(ohtani_bat_sum_mod)
+```
+
+Finding a p-value of 0.4377 and an Adjusted R-squared of -0.05342 tells that there is no statistical significance to this model. If anything, Ohtani's batting is irrelevant to the year.
+
+Finally, I chose to plot Ohtani's launch_speed_by_year by game_date, so as to create a more visual analysis. I decided to use game_date rather than game_year, as I felt it produced a more involved mapping, where years could still be identified.
+
+```{r}
+ggplot(data = ohtani_bat_orig, mapping = aes(x = game_date , y = launch_speed)) +
+  geom_point(size = 2, alpha = 0.05, aes(color = game_year)) +
+  theme_light() +
+  geom_smooth(method = lm, col = 'deepskyblue2', se = FALSE) +
+  labs(y = 'Launch Speed', x = 'Game Date', title = 'Ohtani Exit Velocities by Game Year')
+```
+
+Question 2: Ohtani's Best Opponents
+
+**Finding the Best Batter Against Ohtani**
+
+In the following code I use web scraping to develop datasets containing Shohei Ohtani's *pitching* stats.
+
+```{r}
+ohtani_p18 <- scrape_statcast_savant(start_date = "2018-03-29", end_date = "2019-07-07", playerid = 660271, player_type = "pitcher")
+
+ohtani_p20 <- scrape_statcast_savant(start_date = "2020-03-26", end_date = "2020-09-27", playerid = 660271, player_type = "pitcher")
+
+ohtani_p21 <- scrape_statcast_savant(start_date = "2021-04-01", end_date = "2021-10-03", playerid = 660271, player_type = "pitcher")
+
+ohtani_p22 <- scrape_statcast_savant(start_date = "2022-04-07", end_date = "2022-10-05", playerid = 660271, player_type = "pitcher")
+
+ohtani_pitch_orig <- rbind(ohtani_p18, ohtani_p20, ohtani_p21, ohtani_p22)
+```
+
+Below, I depict the 8 top rows of the dataset containing all 5,126 recorded pitches of Shohei Ohtani's MLB career. I also went through to select only the columns I would want.
+
+```{r}
+ohtani_pitch = ohtani_pitch_orig %>%
+  select(batter,
+         pitcher,
+         home_team,
+         delta_home_win_exp)
+head(ohtani_pitch, 8)
+```
+
+Unfortunately, not all data is perfect to work with. In this case, Ohtani could be either Home or Away, and the stats I want to measure are based on the home team, not on Ohtani's team. The following code should sort out the issue.
+
+```{r}
+ohtani_pitch <- ohtani_pitch %>%
+  mutate(home_team = recode(home_team,
+                            'LAA' = '1',
+                            'HOU' = '-1',
+                            'DET' = '-1',
+                            'SEA' = '-1',
+                            'OAK' = '-1',
+                            'ARI' = '-1',
+                            'ATL' = '-1',
+                            'BAL' = '-1',
+                            'BOS' = '-1',
+                            'MIA' = '-1',
+                            'MIN' = '-1',
+                            'NYY' = '-1',
+                            'TEX' = '-1',
+                            'TOR' = '-1'))
+ohtani_pitch <- ohtani_pitch %>%
+  mutate(home_team = as.numeric(home_team))
+         
+ohtani_pitch <- ohtani_pitch %>%
+  mutate(ohtani_dhwe = delta_home_win_exp * home_team)
+head(ohtani_pitch, 8)
+```
+
+Below, I produce groupings of the Ohtani pitches by batter, so as to be sorted later.
+
+```{r}
+ohtani_batters <- ohtani_pitch %>%
+  group_by(batter)
+```
+
+Here I will use these groupings to sort the data, by mean delta_home_win_exp. This should be a good variable to track the so-called "value" of any given pitch, as it measures the impact on the game each pitch has, which, as logic would follow, could measure how good the pitch itself was in terms of wins provided to the team.
+
+```{r}
+ohtani_batters_sum <- ohtani_batters %>%
+  summarise(
+    DHWE = mean(ohtani_dhwe)
+  )
+ohtani_batters_sum
+```
+
+I wanted to picture this, since these numbers just feel so mind-numbing. Here's my scatter plot:
+
+```{r}
+ggplot(data = ohtani_batters_sum, mapping = aes(x = batter , y = DHWE)) +
+  geom_point(size = 2, alpha = 0.5, color = 'chocolate4') +
+  theme_light() +
+  labs(y = 'Delta in Wins for the Home team Expected', x = 'Batter ID', title = 'DWHE against Shohei Ohtani for Batters', subtitle = 'Higher is Better')
+```
+
+By the measure of the change in win percentage for Shohei Ohtani's team this is the best batter against Ohtani's pitches.
+
+```{r}
+best_batter <- ohtani_batters_sum[order(ohtani_batters_sum$DHWE, decreasing = TRUE),][1,]
+best_batter
+playername_lookup(as.numeric(best_batter[1,1]))
+```
+
+Eric Haase! Apparently this guy has Ohtani's number, maybe he's the reason Ohtani hasn't been to the playoffs...
+
+**Finding the Best Pitcher Against Ohtani**
+
+Now, I've already scraped Ohtani's at-bats, so here I select the useful columns from Ohtani's at-bats, and display a few of the top values.
+
+```{r}
+ohtani_bat = ohtani_bat_orig %>%
+  select(batter,
+         pitcher,
+         home_team,
+         delta_home_win_exp)
+head(ohtani_bat, 8)
+```
+
+Now I need to sort out whether is Ohtani is at home or not, using a similar process as has been demonstrated.
+
+```{r}
+ohtani_bat <- ohtani_bat %>%
+  mutate(home_team = recode(home_team,
+                            'LAA' = '1',
+                            'HOU' = '-1',
+                            'DET' = '-1',
+                            'SEA' = '-1',
+                            'OAK' = '-1',
+                            'ARI' = '-1',
+                            'ATL' = '-1',
+                            'BAL' = '-1',
+                            'BOS' = '-1',
+                            'MIA' = '-1',
+                            'MIN' = '-1',
+                            'NYY' = '-1',
+                            'TEX' = '-1',
+                            'TOR' = '-1'))
+ohtani_bat <- ohtani_bat %>%
+  mutate(home_team = as.numeric(home_team))
+         
+ohtani_bat <- ohtani_bat %>%
+  mutate(ohtani_dhwe = delta_home_win_exp * home_team)
+head(ohtani_bat, 8)
+```
+
+Below, I produce groupings of the Ohtani at-bats by pitcher, so as to be sorted later.
+
+```{r}
+ohtani_pitchers <- ohtani_bat %>%
+  group_by(pitcher)
+```
+
+Now I'll sort through the data to find the mean delta_home_win_exp by pitcher, essentially looking for the by-pitcher stats against the batter Ohtani.
+
+```{r}
+ohtani_pitchers_sum <- ohtani_pitchers %>%
+  summarise(
+    DHWE = mean(ohtani_dhwe)
+  )
+ohtani_pitchers_sum
+```
+
+These numbers are all so bland, so I had to visualize them more. Here's my scatter plot:
+
+```{r}
+ggplot(data = ohtani_pitchers_sum, mapping = aes(x = pitcher , y = DHWE)) +
+  geom_point(size = 2, alpha = 0.5, color = 'sienna') +
+  theme_light() +
+  labs(y = 'Delta in Wins for the Home team Expected', x = 'Batter ID', title = 'DWHE against Shohei Ohtani for Pitchers', subtitle = 'Lower is Better')
+```
+
+Now, to find the best pitcher against Ohtani, I'm looking for the pitcher who created the lowest DHWE, since this essentially means that their pitches lowered Ohtani's chances of winning the most, on average.
+
+```{r}
+best_pitcher <- ohtani_pitchers_sum[order(ohtani_pitchers_sum$DHWE, decreasing = FALSE),][1,]
+best_pitcher
+playername_lookup(as.numeric(best_pitcher[1,1]))
+```
+
+Enoli Paredes gets it done! This guy must be some pitcher to stop Ohtani in his tracks!
+
+Following Up, Question 1: An Analysis of Team-Based Difficulties
+
+**Finding the Best Batting Team Against Ohtani**
+
+In my prior analysis, I have already web-scraped data in order to find the best individual batter against Ohtani, but often the important data comes at team-level play. 
+
+Again, I depict the 8 top rows of the dataset containing all 5,126 recorded pitches of Shohei Ohtani's MLB career. I also went through to select only the columns I will use. 
+
+```{r}
+ohtani_pitch_2 = ohtani_pitch_orig %>%
+  select(batter,
+         pitcher,
+         home_team,
+         away_team,
+         delta_home_win_exp)
+head(ohtani_pitch_2, 8)
+```
+
+Unfortunately, not all data is perfect to work with. In this case, Ohtani could be either Home or Away, and the stats I want to measure are based on the home team, not on Ohtani's team. The following code should sort out the issue.
+
+Ultimately, I need to sort my value statistic by home/away setting based on Ohtani, the player I want to measure. As such, I create a new variable to hold this information, that way I can maintain which team is home and which team is away.
+
+```{r}
+ohtani_pitch_2 <- ohtani_pitch_2 %>%
+  mutate(ohtani_home_value = recode(home_team,
+                            'LAA' = '1',
+                            'HOU' = '-1',
+                            'DET' = '-1',
+                            'SEA' = '-1',
+                            'OAK' = '-1',
+                            'ARI' = '-1',
+                            'ATL' = '-1',
+                            'BAL' = '-1',
+                            'BOS' = '-1',
+                            'MIA' = '-1',
+                            'MIN' = '-1',
+                            'NYY' = '-1',
+                            'TEX' = '-1',
+                            'TOR' = '-1'))
+ohtani_pitch_2 <- ohtani_pitch_2 %>%
+  mutate(ohtani_home_value = as.numeric(ohtani_home_value))
+         
+ohtani_pitch_2 <- ohtani_pitch_2 %>%
+  mutate(ohtani_dhwe = delta_home_win_exp * ohtani_home_value)
+head(ohtani_pitch_2, 8)
+```
+
+
+
+
